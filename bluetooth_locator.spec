@@ -7,7 +7,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('beacon_database.json', '.'),  # 包含信标数据库文件
+        # ('beacon_database.json', '.'),
     ],
     hiddenimports=[
         'paho.mqtt.client',
