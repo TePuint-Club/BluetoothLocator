@@ -8,6 +8,7 @@ import queue
 import os
 import math
 import json
+import yaml
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -16,22 +17,106 @@ from matplotlib.figure import Figure
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
-ip = "60.205.184.72"
-port = 1883
+
+class ConfigManager:
+    """配置管理类，负责读写YAML配置文件"""
+    
+    def __init__(self, config_file="config.yaml"):
+        self.config_file = config_file
+        self.default_config = {
+            "mqtt": {
+                "ip": "localhost",
+                "port": 1883
+            },
+            "rssi_model": {
+                "tx_power": -59,  # 1米处的RSSI值 (dBm)
+                "path_loss_exponent": 2.0  # 路径损失指数
+            }
+        }
+        self.load_config()
+    
+    def load_config(self):
+        """加载配置文件，如果不存在则创建默认配置"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    self.config = yaml.safe_load(f) or {}
+                # 确保所有必要的键都存在
+                self._merge_default_config()
+            else:
+                self.config = self.default_config.copy()
+                self.save_config()
+        except Exception as e:
+            print(f"加载配置文件失败: {e}")
+            self.config = self.default_config.copy()
+            self.save_config()
+    
+    def _merge_default_config(self):
+        """合并默认配置，确保所有必要的键都存在"""
+        def merge_dict(default, current):
+            for key, value in default.items():
+                if key not in current:
+                    current[key] = value
+                elif isinstance(value, dict) and isinstance(current[key], dict):
+                    merge_dict(value, current[key])
+        
+        merge_dict(self.default_config, self.config)
+    
+    def save_config(self):
+        """保存配置到文件"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(self.config, f, default_flow_style=False, 
+                         allow_unicode=True, indent=2)
+        except Exception as e:
+            print(f"保存配置文件失败: {e}")
+    
+    def get_mqtt_config(self):
+        """获取MQTT配置"""
+        return self.config["mqtt"]
+    
+    def get_rssi_model_config(self):
+        """获取RSSI模型配置"""
+        return self.config["rssi_model"]
+    
+    def set_mqtt_config(self, ip, port):
+        """设置MQTT配置"""
+        self.config["mqtt"]["ip"] = ip
+        self.config["mqtt"]["port"] = port
+        self.save_config()
+    
+    def set_rssi_model_config(self, tx_power, path_loss_exponent):
+        """设置RSSI模型配置"""
+        self.config["rssi_model"]["tx_power"] = tx_power
+        self.config["rssi_model"]["path_loss_exponent"] = path_loss_exponent
+        self.save_config()
+
+
+# 全局配置管理器
+config_manager = ConfigManager()
 
 class BeaconLocationCalculator:
     """基于RSSI的蓝牙信标定位算法"""
 
-    def __init__(self):
+    def __init__(self, config_manager=None):
         # 蓝牙信标位置数据库 (MAC地址 -> 位置信息)
         self.beacon_database = {}
-        # RSSI-距离模型参数
-        self.tx_power = -59  # 1米处的RSSI值 (dBm)
-        self.path_loss_exponent = 2.0  # 路径损失指数
+        # 配置管理器
+        self.config_manager = config_manager or ConfigManager()
+        # RSSI-距离模型参数，从配置文件获取
+        rssi_config = self.config_manager.get_rssi_model_config()
+        self.tx_power = rssi_config["tx_power"]  # 1米处的RSSI值 (dBm)
+        self.path_loss_exponent = rssi_config["path_loss_exponent"]  # 路径损失指数
         # 定位历史记录
         self.location_history = []
         self.location_csv_path = "terminal_locations.csv"
         self.init_location_csv()
+    
+    def update_rssi_model_params(self, tx_power, path_loss_exponent):
+        """更新RSSI模型参数"""
+        self.tx_power = tx_power
+        self.path_loss_exponent = path_loss_exponent
+        self.config_manager.set_rssi_model_config(tx_power, path_loss_exponent)
 
     def init_location_csv(self):
         """初始化位置记录CSV文件"""
@@ -390,17 +475,20 @@ class BeaconLocationCalculator:
 
 
 class MQTTDataProcessor:
-    def __init__(self):
+    def __init__(self, config_manager=None):
         self.bluetooth_data = []
         self.bluetooth_id_counter = 0
         self.location_id_counter = 0
         self.lock = threading.Lock()
+        
+        # 配置管理器
+        self.config_manager = config_manager or ConfigManager()
 
         # 确保CSV文件存在
         self.bluetooth_csv_path = "bluetooth_position_data.csv"
 
         # 初始化定位计算器
-        self.location_calculator = BeaconLocationCalculator()
+        self.location_calculator = BeaconLocationCalculator(self.config_manager)
         self.location_calculator.load_beacon_database()
 
         # 创建CSV文件头部
@@ -569,7 +657,8 @@ class MQTTDataProcessor:
         client.on_message = self.on_message
 
         try:
-            client.connect(ip, port, 60)
+            mqtt_config = self.config_manager.get_mqtt_config()
+            client.connect(mqtt_config["ip"], mqtt_config["port"], 60)
             client.loop_forever()
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] MQTT连接错误: {str(e)}"
@@ -577,8 +666,9 @@ class MQTTDataProcessor:
 
 
 class DataMonitorGUI:
-    def __init__(self, processor: MQTTDataProcessor):
+    def __init__(self, processor: MQTTDataProcessor, config_manager: ConfigManager):
         self.processor = processor
+        self.config_manager = config_manager
         self.message_queue = queue.Queue()
         self.root = tk.Tk()
         self.root.title("蓝牙信标定位监控系统")
@@ -598,6 +688,7 @@ class DataMonitorGUI:
         self.create_monitor_tab()
         self.create_beacon_management_tab()
         self.create_visualization_tab()
+        self.create_settings_tab()
 
         # 启动更新线程
         self.update_gui()
@@ -834,6 +925,185 @@ class DataMonitorGUI:
         except Exception as e:
             print(f"更新可视化时出错: {e}")
 
+    def create_settings_tab(self):
+        """创建设置选项卡"""
+        settings_frame = ttk.Frame(self.notebook)
+        self.notebook.add(settings_frame, text="系统设置")
+
+        # 主框架
+        main_frame = ttk.Frame(settings_frame, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # MQTT设置框架
+        mqtt_frame = ttk.LabelFrame(main_frame, text="MQTT服务器设置", padding="10")
+        mqtt_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # IP地址设置
+        ip_frame = ttk.Frame(mqtt_frame)
+        ip_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(ip_frame, text="IP地址:").pack(side=tk.LEFT, padx=(0, 5))
+        self.mqtt_ip_entry = ttk.Entry(ip_frame, width=20)
+        self.mqtt_ip_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 端口设置
+        port_frame = ttk.Frame(mqtt_frame)
+        port_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(port_frame, text="端口:").pack(side=tk.LEFT, padx=(0, 5))
+        self.mqtt_port_entry = ttk.Entry(port_frame, width=10)
+        self.mqtt_port_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # MQTT按钮
+        mqtt_button_frame = ttk.Frame(mqtt_frame)
+        mqtt_button_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(mqtt_button_frame, text="保存MQTT设置", command=self.save_mqtt_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(mqtt_button_frame, text="恢复默认", command=self.reset_mqtt_settings).pack(side=tk.LEFT)
+
+        # RSSI模型设置框架
+        rssi_frame = ttk.LabelFrame(main_frame, text="RSSI-距离模型参数", padding="10")
+        rssi_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 1米处RSSI值设置
+        tx_power_frame = ttk.Frame(rssi_frame)
+        tx_power_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(tx_power_frame, text="1米处的RSSI值 (dBm):").pack(side=tk.LEFT, padx=(0, 5))
+        self.tx_power_entry = ttk.Entry(tx_power_frame, width=10)
+        self.tx_power_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 路径损失指数设置
+        path_loss_frame = ttk.Frame(rssi_frame)
+        path_loss_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(path_loss_frame, text="路径损失指数:").pack(side=tk.LEFT, padx=(0, 5))
+        self.path_loss_entry = ttk.Entry(path_loss_frame, width=10)
+        self.path_loss_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # RSSI模型按钮
+        rssi_button_frame = ttk.Frame(rssi_frame)
+        rssi_button_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(rssi_button_frame, text="保存RSSI设置", command=self.save_rssi_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(rssi_button_frame, text="恢复默认", command=self.reset_rssi_settings).pack(side=tk.LEFT)
+
+        # 配置信息显示框架
+        info_frame = ttk.LabelFrame(main_frame, text="当前配置信息", padding="10")
+        info_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.config_info_text = scrolledtext.ScrolledText(info_frame, height=10, width=60)
+        self.config_info_text.pack(fill=tk.BOTH, expand=True)
+
+        # 加载当前设置
+        self.load_current_settings()
+
+    def load_current_settings(self):
+        """加载当前配置到输入框"""
+        if not self.config_manager:
+            return
+
+        # 加载MQTT设置
+        mqtt_config = self.config_manager.get_mqtt_config()
+        self.mqtt_ip_entry.delete(0, tk.END)
+        self.mqtt_ip_entry.insert(0, mqtt_config["ip"])
+        self.mqtt_port_entry.delete(0, tk.END)
+        self.mqtt_port_entry.insert(0, str(mqtt_config["port"]))
+
+        # 加载RSSI模型设置
+        rssi_config = self.config_manager.get_rssi_model_config()
+        self.tx_power_entry.delete(0, tk.END)
+        self.tx_power_entry.insert(0, str(rssi_config["tx_power"]))
+        self.path_loss_entry.delete(0, tk.END)
+        self.path_loss_entry.insert(0, str(rssi_config["path_loss_exponent"]))
+
+        # 更新配置信息显示
+        self.update_config_info_display()
+
+    def save_mqtt_settings(self):
+        """保存MQTT设置"""
+        try:
+            ip = self.mqtt_ip_entry.get().strip()
+            port = int(self.mqtt_port_entry.get())
+
+            if not ip:
+                messagebox.showerror("错误", "请输入IP地址")
+                return
+
+            if port <= 0 or port > 65535:
+                messagebox.showerror("错误", "端口号必须在1-65535之间")
+                return
+
+            self.config_manager.set_mqtt_config(ip, port)
+            self.update_config_info_display()
+            messagebox.showinfo("成功", "MQTT设置已保存")
+
+        except ValueError:
+            messagebox.showerror("错误", "请输入有效的端口号")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存设置失败: {e}")
+
+    def reset_mqtt_settings(self):
+        """恢复MQTT默认设置"""
+        self.mqtt_ip_entry.delete(0, tk.END)
+        self.mqtt_ip_entry.insert(0, "localhost")
+        self.mqtt_port_entry.delete(0, tk.END)
+        self.mqtt_port_entry.insert(0, "1883")
+
+    def save_rssi_settings(self):
+        """保存RSSI模型设置"""
+        try:
+            tx_power = float(self.tx_power_entry.get())
+            path_loss_exponent = float(self.path_loss_entry.get())
+
+            if path_loss_exponent <= 0:
+                messagebox.showerror("错误", "路径损失指数必须大于0")
+                return
+
+            self.config_manager.set_rssi_model_config(tx_power, path_loss_exponent)
+            
+            # 更新处理器中的参数
+            if self.processor:
+                self.processor.location_calculator.update_rssi_model_params(tx_power, path_loss_exponent)
+            
+            self.update_config_info_display()
+            messagebox.showinfo("成功", "RSSI模型设置已保存")
+
+        except ValueError:
+            messagebox.showerror("错误", "请输入有效的数值")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存设置失败: {e}")
+
+    def reset_rssi_settings(self):
+        """恢复RSSI模型默认设置"""
+        self.tx_power_entry.delete(0, tk.END)
+        self.tx_power_entry.insert(0, "-59")
+        self.path_loss_entry.delete(0, tk.END)
+        self.path_loss_entry.insert(0, "2.0")
+
+    def update_config_info_display(self):
+        """更新配置信息显示"""
+        if not self.config_manager:
+            return
+
+        try:
+            config_text = "当前配置:\n\n"
+            
+            # MQTT配置
+            mqtt_config = self.config_manager.get_mqtt_config()
+            config_text += "MQTT服务器配置:\n"
+            config_text += f"  IP地址: {mqtt_config['ip']}\n"
+            config_text += f"  端口: {mqtt_config['port']}\n\n"
+            
+            # RSSI模型配置
+            rssi_config = self.config_manager.get_rssi_model_config()
+            config_text += "RSSI-距离模型参数:\n"
+            config_text += f"  1米处的RSSI值: {rssi_config['tx_power']} dBm\n"
+            config_text += f"  路径损失指数: {rssi_config['path_loss_exponent']}\n\n"
+            
+            # 配置文件路径
+            config_text += f"配置文件路径: {self.config_manager.config_file}\n"
+
+            self.config_info_text.delete(1.0, tk.END)
+            self.config_info_text.insert(1.0, config_text)
+
+        except Exception as e:
+            print(f"更新配置信息显示时出错: {e}")
+
     def add_location_to_history(self, location_data):
         """添加位置数据到历史记录"""
         self.location_history.append({
@@ -1023,12 +1293,18 @@ class DataMonitorGUI:
 
 
 def main():
-    assert ip != "*#*#not_a_real_ip#*#*", "请设置正确的MQTT服务器IP地址"
+    # 创建配置管理器
+    config_mgr = config_manager
     
-    # 创建数据处理器并传入GUI引用
-    processor = MQTTDataProcessor()
-    # 创建GUI
-    gui = DataMonitorGUI(processor)  # 先创建GUI
+    # 检查配置是否有效
+    mqtt_config = config_mgr.get_mqtt_config()
+    if not mqtt_config["ip"] or mqtt_config["ip"] == "*#*#not_a_real_ip#*#*":
+        print("请在设置中配置正确的MQTT服务器IP地址")
+    
+    # 创建数据处理器并传入配置管理器
+    processor = MQTTDataProcessor(config_mgr)
+    # 创建GUI并传入配置管理器
+    gui = DataMonitorGUI(processor, config_mgr)
     processor.on_location(gui.add_location_to_history)  # 传递位置更新函数
     processor.on_gui_message(gui.message_queue.put)  # 传递日志更新函数
 
