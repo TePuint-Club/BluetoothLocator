@@ -1,0 +1,13 @@
+[project]
+name = "logtool"
+version = "0.1.0"
+description = "MQTT data processor for Bluetooth and BD Fanyuan position data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "paho-mqtt>=1.6.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.10.3",
+    "pyinstaller>=6.14.2",
+]

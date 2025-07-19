@@ -1,0 +1,13 @@
+# 蓝牙信标定位监控系统依赖包
+paho-mqtt>=1.6.0
+pandas>=1.5.0
+matplotlib>=3.5.0
+numpy>=1.21.0
+pyinstaller>=5.0.0
+
+# 说明：
+# - paho-mqtt: MQTT客户端库
+# - pandas: 数据处理和CSV文件操作
+# - matplotlib: 图形绘制和可视化
+# - numpy: 数值计算支持
+# - pyinstaller: 打包工具
