@@ -16,10 +16,8 @@ from matplotlib.figure import Figure
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
-ip = "*#*#not_a_real_ip#*#*"
+ip = "60.205.184.72"
 port = 1883
-
-
 
 class BeaconLocationCalculator:
     """基于RSSI的蓝牙信标定位算法"""
@@ -69,7 +67,7 @@ class BeaconLocationCalculator:
         except Exception as e:
             print(f"保存示例信标数据库失败: {e}")
 
-    def add_beacon(self, mac_address, longitude, latitude, altitude=0):
+    def add_beacon(self, mac_address, longitude, latitude, altitude=0.0):
         """添加信标到数据库"""
         self.beacon_database[mac_address] = {
             "longitude": longitude,
@@ -78,7 +76,7 @@ class BeaconLocationCalculator:
         }
         self.save_beacon_database()
 
-    def update_beacon(self, mac_address, longitude, latitude, altitude=0):
+    def update_beacon(self, mac_address, longitude, latitude, altitude=0.0):
         """更新信标信息"""
         if mac_address in self.beacon_database:
             self.beacon_database[mac_address] = {
@@ -392,12 +390,11 @@ class BeaconLocationCalculator:
 
 
 class MQTTDataProcessor:
-    def __init__(self, gui=None):
+    def __init__(self):
         self.bluetooth_data = []
         self.bluetooth_id_counter = 0
         self.location_id_counter = 0
         self.lock = threading.Lock()
-        self.gui = gui  # GUI引用
 
         # 确保CSV文件存在
         self.bluetooth_csv_path = "bluetooth_position_data.csv"
@@ -410,7 +407,18 @@ class MQTTDataProcessor:
         self.init_csv_files()
 
         # 消息队列用于GUI更新
-        self.message_queue = queue.Queue()
+        self.message_queue = None
+        self.fn_message = None
+        
+        
+    def on_location(self, fn_location):
+        """处理位置数据"""
+        assert callable(fn_location), "fn_location must be a callable function"
+        self.fn_location = fn_location
+
+    def on_gui_message(self, fn_message):
+        assert callable(fn_message), "fn_message must be a callable function"
+        self.fn_message = fn_message
 
     def init_csv_files(self):
         # 初始化蓝牙数据CSV文件
@@ -439,18 +447,18 @@ class MQTTDataProcessor:
         if rc == 0:
             message = f"[{datetime.now().strftime('%H:%M:%S')}] 成功连接到MQTT服务器"
             print(message)
-            self.message_queue.put(message)
-
+            self.fn_message(message) if self.fn_message else None
+                
             # 订阅主题
             client.subscribe("/device/blueTooth/station/+")
 
             message = f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅主题"
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅主题")
-            self.message_queue.put(message)
+            self.fn_message(message) if self.fn_message else None
         else:
             message = f"[{datetime.now().strftime('%H:%M:%S')}] 连接失败，返回码: {rc}"
             print(message)
-            self.message_queue.put(message)
+            self.fn_message(message) if self.fn_message else None
 
     def on_message(self, client, userdata, msg):
         try:
@@ -478,12 +486,12 @@ class MQTTDataProcessor:
 
                     message = f"[{datetime.now().strftime('%H:%M:%S')}] 蓝牙数据已处理，当前ID: {self.bluetooth_id_counter-1}"
                     print(message)
-                    self.message_queue.put(message)
+                    self.fn_message(message) if self.fn_message else None
 
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 处理消息时出错: {str(e)}"
             print(error_message)
-            self.message_queue.put(error_message)
+            self.fn_message(message) if self.fn_message else None
 
     def save_bluetooth_data_to_csv(self, new_data):
         """实时保存蓝牙数据到CSV"""
@@ -526,23 +534,22 @@ class MQTTDataProcessor:
                 self.save_location_to_csv(location_data)
 
                 # 传递位置数据给GUI用于可视化
-                if self.gui:
-                    self.gui.add_location_to_history(location_data)
+                self.fn_location(location_data) if self.fn_location else None
 
                 message = f"[{datetime.now().strftime('%H:%M:%S')}] 位置计算成功: ({location_result['latitude']:.6f}, {location_result['longitude']:.6f}), 方法: {location_result['method']}, 信标数: {location_result['beacon_count']}"
                 print(message)
-                self.message_queue.put(message)
+                self.fn_message(message) if self.fn_message else None
 
                 self.location_id_counter += 1
             else:
                 message = f"[{datetime.now().strftime('%H:%M:%S')}] 位置计算失败: {location_result.get('message', '未知错误') if location_result else '计算返回None'}"
                 print(message)
-                self.message_queue.put(message)
+                self.fn_message(message) if self.fn_message else None
 
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 位置计算出错: {str(e)}"
             print(error_message)
-            self.message_queue.put(error_message)
+            self.fn_message(message) if self.fn_message else None
 
     def save_location_to_csv(self, location_data):
         """保存位置数据到CSV"""
@@ -566,13 +573,13 @@ class MQTTDataProcessor:
             client.loop_forever()
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] MQTT连接错误: {str(e)}"
-            print(error_message)
-            self.message_queue.put(error_message)
+            self.fn_message(error_message) if self.fn_message else None
 
 
 class DataMonitorGUI:
-    def __init__(self, processor=None):
+    def __init__(self, processor: MQTTDataProcessor):
         self.processor = processor
+        self.message_queue = queue.Queue()
         self.root = tk.Tk()
         self.root.title("蓝牙信标定位监控系统")
         self.root.geometry("1200x800")
@@ -995,7 +1002,7 @@ class DataMonitorGUI:
         # 更新日志
         try:
             while True:
-                message = self.processor.message_queue.get_nowait()
+                message = self.message_queue.get_nowait()
                 self.log_text.insert(tk.END, message + "\n")
                 self.log_text.see(tk.END)
         except queue.Empty:
@@ -1018,14 +1025,12 @@ class DataMonitorGUI:
 def main():
     assert ip != "*#*#not_a_real_ip#*#*", "请设置正确的MQTT服务器IP地址"
     
-    # 创建GUI
-    gui = DataMonitorGUI(None)  # 先创建GUI
-
     # 创建数据处理器并传入GUI引用
-    processor = MQTTDataProcessor(gui)
-
-    # 将处理器设置到GUI中
-    gui.processor = processor # 脏办法
+    processor = MQTTDataProcessor()
+    # 创建GUI
+    gui = DataMonitorGUI(processor)  # 先创建GUI
+    processor.on_location(gui.add_location_to_history)  # 传递位置更新函数
+    processor.on_gui_message(gui.message_queue.put)  # 传递日志更新函数
 
     # 运行GUI
     gui.run()
