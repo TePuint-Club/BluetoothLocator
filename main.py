@@ -8,6 +8,7 @@ import queue
 import os
 import math
 import json
+import time
 import yaml
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -26,7 +27,8 @@ class ConfigManager:
         self.default_config = {
             "mqtt": {
                 "ip": "localhost",
-                "port": 1883
+                "port": 1883,
+                "topic": "/device/blueTooth/station/+"
             },
             "rssi_model": {
                 "tx_power": -59,  # 1米处的RSSI值 (dBm)
@@ -79,10 +81,12 @@ class ConfigManager:
         """获取RSSI模型配置"""
         return self.config["rssi_model"]
     
-    def set_mqtt_config(self, ip, port):
+    def set_mqtt_config(self, ip, port, topic=None):
         """设置MQTT配置"""
         self.config["mqtt"]["ip"] = ip
         self.config["mqtt"]["port"] = port
+        if topic is not None:
+            self.config["mqtt"]["topic"] = topic
         self.save_config()
     
     def set_rssi_model_config(self, tx_power, path_loss_exponent):
@@ -487,6 +491,9 @@ class MQTTDataProcessor:
         # 控制状态 - 默认暂停记录
         self.is_paused = True  # 默认暂停状态
         self.is_recording = False  # 记录状态
+        
+        # MQTT连接状态
+        self.current_topic = None
 
         # 确保CSV文件存在
         self.bluetooth_csv_path = "bluetooth_position_data.csv"
@@ -612,10 +619,13 @@ class MQTTDataProcessor:
             self.fn_message(message) if self.fn_message else None
                 
             # 订阅主题
-            client.subscribe("/device/blueTooth/station/+")
+            mqtt_config = self.config_manager.get_mqtt_config()
+            topic = mqtt_config.get("topic", "/device/blueTooth/station/+")
+            client.subscribe(topic)
+            self.current_topic = topic
 
-            message = f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅主题"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅主题")
+            message = f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅主题: {topic}"
+            print(message)
             self.fn_message(message) if self.fn_message else None
         else:
             message = f"[{datetime.now().strftime('%H:%M:%S')}] 连接失败，返回码: {rc}"
@@ -626,39 +636,41 @@ class MQTTDataProcessor:
         try:
             topic = msg.topic
             payload = msg.payload.decode('utf-8')
+            message = f"[{datetime.now().strftime('%H:%M:%S')}] 收到消息 - 主题: {topic}, 内容: {payload}"
+            self.fn_message(message) if self.fn_message else None
+            print(message)
 
             with self.lock:
-                if topic.startswith("/device/blueTooth/station/"):
-                    # 处理蓝牙数据（用于可视化，不受暂停状态影响）
-                    bluetooth_results = self.handle_bluetooth_position_data(
-                        payload)
-                    
-                    # 始终尝试计算位置用于可视化
-                    self.calculate_location_for_visualization(bluetooth_results)
-                    
-                    # 检查是否暂停记录
-                    if self.is_paused:
-                        message = f"[{datetime.now().strftime('%H:%M:%S')}] 因暂停跳过数据记录 - 设备ID: {bluetooth_results[0]['device_id'] if bluetooth_results else 'Unknown'}"
-                        print(message)
-                        self.fn_message(message) if self.fn_message else None
-                        return
-                    
-                    # 为每个蓝牙数据项添加ID
-                    for result in bluetooth_results:
-                        result["id"] = self.bluetooth_id_counter
-                        self.bluetooth_data.append(result)
-
-                    self.bluetooth_id_counter += 1
-
-                    # 保存到CSV
-                    self.save_bluetooth_data_to_csv(bluetooth_results)
-
-                    # 计算并保存终端位置
-                    self.calculate_and_save_location(bluetooth_results)
-
-                    message = f"[{datetime.now().strftime('%H:%M:%S')}] 蓝牙数据已处理并记录，当前ID: {self.bluetooth_id_counter-1}, 设备: {bluetooth_results[0]['device_id']}"
+                # 处理蓝牙数据（用于可视化，不受暂停状态影响）
+                bluetooth_results = self.handle_bluetooth_position_data(
+                    payload)
+                
+                # 始终尝试计算位置用于可视化
+                self.calculate_location_for_visualization(bluetooth_results)
+                
+                # 检查是否暂停记录
+                if self.is_paused:
+                    message = f"[{datetime.now().strftime('%H:%M:%S')}] 因暂停跳过数据记录 - 设备ID: {bluetooth_results[0]['device_id'] if bluetooth_results else 'Unknown'}"
                     print(message)
                     self.fn_message(message) if self.fn_message else None
+                    return
+                
+                # 为每个蓝牙数据项添加ID
+                for result in bluetooth_results:
+                    result["id"] = self.bluetooth_id_counter
+                    self.bluetooth_data.append(result)
+
+                self.bluetooth_id_counter += 1
+
+                # 保存到CSV
+                self.save_bluetooth_data_to_csv(bluetooth_results)
+
+                # 计算并保存终端位置
+                self.calculate_and_save_location(bluetooth_results)
+
+                message = f"[{datetime.now().strftime('%H:%M:%S')}] 蓝牙数据已处理并记录，当前ID: {self.bluetooth_id_counter-1}, 设备: {bluetooth_results[0]['device_id']}"
+                print(message)
+                self.fn_message(message) if self.fn_message else None
 
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 处理消息时出错: {str(e)}"
@@ -736,17 +748,54 @@ class MQTTDataProcessor:
 
     def start_mqtt_client(self):
         """启动MQTT客户端"""
-        client = mqtt.Client()
-        client.on_connect = self.on_connect
-        client.on_message = self.on_message
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
 
         try:
             mqtt_config = self.config_manager.get_mqtt_config()
-            client.connect(mqtt_config["ip"], mqtt_config["port"], 60)
-            client.loop_forever()
+            self.client.connect(mqtt_config["ip"], mqtt_config["port"], 60)
+            self.client.loop_forever()
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] MQTT连接错误: {str(e)}"
             self.fn_message(error_message) if self.fn_message else None
+    
+    def stop_mqtt_client(self):
+        """停止MQTT客户端"""
+        if hasattr(self, 'client') and self.client:
+            try:
+                self.client.disconnect()
+                self.client.loop_stop()
+                message = f"[{datetime.now().strftime('%H:%M:%S')}] MQTT连接已断开"
+                print(message)
+                self.fn_message(message) if self.fn_message else None
+            except Exception as e:
+                error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 断开MQTT连接时出错: {str(e)}"
+                self.fn_message(error_message) if self.fn_message else None
+    
+    def change_mqtt_topic(self, new_topic):
+        """更改MQTT主题订阅"""
+        if hasattr(self, 'client') and self.client and self.current_topic:
+            try:
+                # 取消订阅当前主题
+                self.client.unsubscribe(self.current_topic)
+                message = f"[{datetime.now().strftime('%H:%M:%S')}] 已取消订阅主题: {self.current_topic}"
+                print(message)
+                self.fn_message(message) if self.fn_message else None
+                
+                # 订阅新主题
+                self.client.subscribe(new_topic)
+                self.current_topic = new_topic
+                message = f"[{datetime.now().strftime('%H:%M:%S')}] 已订阅新主题: {new_topic}"
+                print(message)
+                self.fn_message(message) if self.fn_message else None
+                
+                return True
+            except Exception as e:
+                error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 更改主题订阅时出错: {str(e)}"
+                self.fn_message(error_message) if self.fn_message else None
+                return False
+        return False
 
 
 class DataMonitorGUI:
@@ -760,6 +809,10 @@ class DataMonitorGUI:
 
         # 位置历史记录 - 支持多设备
         self.location_history = {}  # 改为字典，key为device_id
+        
+        # MQTT客户端管理
+        self.mqtt_client = None
+        self.mqtt_thread = None
 
         self.setup_gui()
 
@@ -818,6 +871,10 @@ class DataMonitorGUI:
         self.start_button = ttk.Button(
             button_row1, text="启动MQTT监听", command=self.start_mqtt)
         self.start_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.reconnect_button = ttk.Button(
+            button_row1, text="重新连接", command=self.reconnect_mqtt, state="disabled")
+        self.reconnect_button.pack(side=tk.LEFT, padx=(0, 10))
 
         self.clear_button = ttk.Button(
             button_row1, text="清空日志", command=self.clear_log)
@@ -1073,6 +1130,25 @@ class DataMonitorGUI:
         self.mqtt_port_entry = ttk.Entry(port_frame, width=10)
         self.mqtt_port_entry.pack(side=tk.LEFT, padx=(0, 10))
 
+        # 订阅主题设置
+        topic_frame = ttk.Frame(mqtt_frame)
+        topic_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(topic_frame, text="订阅主题:").pack(side=tk.LEFT, padx=(0, 5))
+        self.mqtt_topic_entry = ttk.Entry(topic_frame, width=30)
+        self.mqtt_topic_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 常用主题快速选择
+        topic_buttons_frame = ttk.Frame(mqtt_frame)
+        topic_buttons_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(topic_buttons_frame, text="常用主题:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(topic_buttons_frame, text="默认", 
+                   command=lambda: self.set_topic("/device/blueTooth/station/+")).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(topic_buttons_frame, text="全部", 
+                   command=lambda: self.set_topic("#")).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(topic_buttons_frame, text="测试", 
+                   command=lambda: self.set_topic("test/topic")).pack(side=tk.LEFT, padx=(0, 2))
+
         # MQTT按钮
         mqtt_button_frame = ttk.Frame(mqtt_frame)
         mqtt_button_frame.pack(fill=tk.X, pady=(5, 0))
@@ -1124,6 +1200,8 @@ class DataMonitorGUI:
         self.mqtt_ip_entry.insert(0, mqtt_config["ip"])
         self.mqtt_port_entry.delete(0, tk.END)
         self.mqtt_port_entry.insert(0, str(mqtt_config["port"]))
+        self.mqtt_topic_entry.delete(0, tk.END)
+        self.mqtt_topic_entry.insert(0, mqtt_config.get("topic", "/device/blueTooth/station/+"))
 
         # 加载RSSI模型设置
         rssi_config = self.config_manager.get_rssi_model_config()
@@ -1135,11 +1213,17 @@ class DataMonitorGUI:
         # 更新配置信息显示
         self.update_config_info_display()
 
+    def set_topic(self, topic):
+        """设置主题到输入框"""
+        self.mqtt_topic_entry.delete(0, tk.END)
+        self.mqtt_topic_entry.insert(0, topic)
+
     def save_mqtt_settings(self):
         """保存MQTT设置"""
         try:
             ip = self.mqtt_ip_entry.get().strip()
             port = int(self.mqtt_port_entry.get())
+            topic = self.mqtt_topic_entry.get().strip()
 
             if not ip:
                 messagebox.showerror("错误", "请输入IP地址")
@@ -1149,9 +1233,28 @@ class DataMonitorGUI:
                 messagebox.showerror("错误", "端口号必须在1-65535之间")
                 return
 
-            self.config_manager.set_mqtt_config(ip, port)
+            if not topic:
+                messagebox.showerror("错误", "请输入订阅主题")
+                return
+
+            # 检查是否只是主题发生了变化
+            current_config = self.config_manager.get_mqtt_config()
+            topic_changed = current_config.get("topic") != topic
+            connection_changed = (current_config.get("ip") != ip or 
+                                current_config.get("port") != port)
+
+            self.config_manager.set_mqtt_config(ip, port, topic)
             self.update_config_info_display()
-            messagebox.showinfo("成功", "MQTT设置已保存")
+
+            if topic_changed and not connection_changed:
+                # 只有主题变化，尝试只更换主题订阅
+                if self.processor and hasattr(self.processor, 'current_topic') and self.processor.current_topic:
+                    if self.processor.change_mqtt_topic(topic):
+                        messagebox.showinfo("成功", "MQTT主题设置已保存并应用")
+                        return
+                
+            # 需要重新连接
+            messagebox.showinfo("成功", "MQTT设置已保存\n注意：需要重新连接MQTT服务器才能生效")
 
         except ValueError:
             messagebox.showerror("错误", "请输入有效的端口号")
@@ -1164,6 +1267,8 @@ class DataMonitorGUI:
         self.mqtt_ip_entry.insert(0, "localhost")
         self.mqtt_port_entry.delete(0, tk.END)
         self.mqtt_port_entry.insert(0, "1883")
+        self.mqtt_topic_entry.delete(0, tk.END)
+        self.mqtt_topic_entry.insert(0, "/device/blueTooth/station/+")
 
     def save_rssi_settings(self):
         """保存RSSI模型设置"""
@@ -1208,7 +1313,8 @@ class DataMonitorGUI:
             mqtt_config = self.config_manager.get_mqtt_config()
             config_text += "MQTT服务器配置:\n"
             config_text += f"  IP地址: {mqtt_config['ip']}\n"
-            config_text += f"  端口: {mqtt_config['port']}\n\n"
+            config_text += f"  端口: {mqtt_config['port']}\n"
+            config_text += f"  订阅主题: {mqtt_config.get('topic', '/device/blueTooth/station/+')}\n\n"
             
             # RSSI模型配置
             rssi_config = self.config_manager.get_rssi_model_config()
@@ -1402,9 +1508,33 @@ class DataMonitorGUI:
     def start_mqtt(self):
         if self.processor:
             self.start_button.config(state="disabled")
-            mqtt_thread = threading.Thread(
+            self.reconnect_button.config(state="normal")
+            self.mqtt_thread = threading.Thread(
                 target=self.processor.start_mqtt_client, daemon=True)
-            mqtt_thread.start()
+            self.mqtt_thread.start()
+    
+    def reconnect_mqtt(self):
+        """重新连接MQTT服务器"""
+        if self.processor:
+            try:
+                # 先停止当前连接
+                self.processor.stop_mqtt_client()
+                
+                # 等待短暂时间确保连接完全断开
+                time.sleep(1)
+                
+                # 启动新连接
+                self.mqtt_thread = threading.Thread(
+                    target=self.processor.start_mqtt_client, daemon=True)
+                self.mqtt_thread.start()
+                
+                message = f"[{datetime.now().strftime('%H:%M:%S')}] 正在重新连接MQTT服务器..."
+                self.log_text.insert(tk.END, message + "\n")
+                self.log_text.see(tk.END)
+            except Exception as e:
+                error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 重连失败: {str(e)}"
+                self.log_text.insert(tk.END, error_message + "\n")
+                self.log_text.see(tk.END)
 
     def clear_log(self):
         self.log_text.delete(1.0, tk.END)
