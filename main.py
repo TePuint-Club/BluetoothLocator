@@ -483,6 +483,10 @@ class MQTTDataProcessor:
         
         # 配置管理器
         self.config_manager = config_manager or ConfigManager()
+        
+        # 控制状态
+        self.is_paused = False  # 暂停状态
+        self.is_recording = True  # 记录状态
 
         # 确保CSV文件存在
         self.bluetooth_csv_path = "bluetooth_position_data.csv"
@@ -507,6 +511,41 @@ class MQTTDataProcessor:
     def on_gui_message(self, fn_message):
         assert callable(fn_message), "fn_message must be a callable function"
         self.fn_message = fn_message
+    
+    def pause_recording(self):
+        """暂停数据记录"""
+        with self.lock:
+            self.is_paused = True
+            message = f"[{datetime.now().strftime('%H:%M:%S')}] 数据记录已暂停"
+            print(message)
+            self.fn_message(message) if self.fn_message else None
+    
+    def resume_recording(self):
+        """恢复数据记录"""
+        with self.lock:
+            self.is_paused = False
+            message = f"[{datetime.now().strftime('%H:%M:%S')}] 数据记录已恢复"
+            print(message)
+            self.fn_message(message) if self.fn_message else None
+    
+    def stop_recording(self):
+        """停止数据记录并重置计数器"""
+        with self.lock:
+            self.is_paused = True
+            self.bluetooth_id_counter = 0
+            self.location_id_counter = 0
+            message = f"[{datetime.now().strftime('%H:%M:%S')}] 数据记录已停止，计数器已重置"
+            print(message)
+            self.fn_message(message) if self.fn_message else None
+    
+    def get_recording_status(self):
+        """获取当前记录状态"""
+        return {
+            "is_paused": self.is_paused,
+            "is_recording": self.is_recording,
+            "bluetooth_count": self.bluetooth_id_counter,
+            "location_count": self.location_id_counter
+        }
 
     def init_csv_files(self):
         # 初始化蓝牙数据CSV文件
@@ -555,6 +594,13 @@ class MQTTDataProcessor:
 
             with self.lock:
                 if topic.startswith("/device/blueTooth/station/"):
+                    # 检查是否暂停
+                    if self.is_paused:
+                        message = f"[{datetime.now().strftime('%H:%M:%S')}] 因暂停跳过数据处理"
+                        print(message)
+                        self.fn_message(message) if self.fn_message else None
+                        return
+                    
                     # 处理蓝牙数据
                     bluetooth_results = self.handle_bluetooth_position_data(
                         payload)
@@ -579,7 +625,7 @@ class MQTTDataProcessor:
         except Exception as e:
             error_message = f"[{datetime.now().strftime('%H:%M:%S')}] 处理消息时出错: {str(e)}"
             print(error_message)
-            self.fn_message(message) if self.fn_message else None
+            self.fn_message(error_message) if self.fn_message else None
 
     def save_bluetooth_data_to_csv(self, new_data):
         """实时保存蓝牙数据到CSV"""
@@ -712,6 +758,9 @@ class DataMonitorGUI:
         self.location_label = ttk.Label(status_frame, text="位置计算数量: 0")
         self.location_label.pack(anchor=tk.W, pady=2)
 
+        self.status_label = ttk.Label(status_frame, text="状态: 正在记录", foreground="green")
+        self.status_label.pack(anchor=tk.W, pady=2)
+
         # 消息日志
         log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -724,13 +773,33 @@ class DataMonitorGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
 
+        # 第一行按钮
+        button_row1 = ttk.Frame(button_frame)
+        button_row1.pack(fill=tk.X, pady=(0, 5))
+
         self.start_button = ttk.Button(
-            button_frame, text="启动MQTT监听", command=self.start_mqtt)
+            button_row1, text="启动MQTT监听", command=self.start_mqtt)
         self.start_button.pack(side=tk.LEFT, padx=(0, 10))
 
         self.clear_button = ttk.Button(
-            button_frame, text="清空日志", command=self.clear_log)
+            button_row1, text="清空日志", command=self.clear_log)
         self.clear_button.pack(side=tk.LEFT)
+
+        # 第二行按钮 - 记录控制
+        button_row2 = ttk.Frame(button_frame)
+        button_row2.pack(fill=tk.X)
+
+        self.pause_button = ttk.Button(
+            button_row2, text="暂停记录", command=self.pause_recording)
+        self.pause_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.resume_button = ttk.Button(
+            button_row2, text="恢复记录", command=self.resume_recording, state="disabled")
+        self.resume_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.stop_button = ttk.Button(
+            button_row2, text="停止记录", command=self.stop_recording)
+        self.stop_button.pack(side=tk.LEFT)
 
     def create_beacon_management_tab(self):
         """创建信标管理选项卡"""
@@ -1246,6 +1315,29 @@ class DataMonitorGUI:
         self.lat_entry.delete(0, tk.END)
         self.alt_entry.delete(0, tk.END)
 
+    def pause_recording(self):
+        """暂停数据记录"""
+        if self.processor:
+            self.processor.pause_recording()
+            self.pause_button.config(state="disabled")
+            self.resume_button.config(state="normal")
+    
+    def resume_recording(self):
+        """恢复数据记录"""
+        if self.processor:
+            self.processor.resume_recording()
+            self.pause_button.config(state="normal")
+            self.resume_button.config(state="disabled")
+    
+    def stop_recording(self):
+        """停止数据记录"""
+        if self.processor:
+            result = messagebox.askyesno("确认", "确定要停止数据记录并重置计数器吗？\n注意：这将重置ID计数器，但不会删除已有数据。")
+            if result:
+                self.processor.stop_recording()
+                self.pause_button.config(state="normal")
+                self.resume_button.config(state="disabled")
+
     def start_mqtt(self):
         if self.processor:
             self.start_button.config(state="disabled")
@@ -1265,9 +1357,16 @@ class DataMonitorGUI:
         with self.processor.lock:
             bluetooth_count = self.processor.bluetooth_id_counter
             location_count = self.processor.location_id_counter
+            is_paused = self.processor.is_paused
 
         self.bluetooth_label.config(text=f"蓝牙数据处理数量: {bluetooth_count}")
         self.location_label.config(text=f"位置计算数量: {location_count}")
+        
+        # 更新状态显示
+        if is_paused:
+            self.status_label.config(text="状态: 已暂停", foreground="red")
+        else:
+            self.status_label.config(text="状态: 正在记录", foreground="green")
 
         # 更新日志
         try:
