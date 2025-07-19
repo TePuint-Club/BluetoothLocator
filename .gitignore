@@ -9,4 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Private data
 converter.ipynb
+beacon_database.json
+bluetooth_position_data.csv
+terminal_locations.csv
+config.yaml

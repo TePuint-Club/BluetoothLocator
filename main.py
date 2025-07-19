@@ -484,9 +484,9 @@ class MQTTDataProcessor:
         # 配置管理器
         self.config_manager = config_manager or ConfigManager()
         
-        # 控制状态
-        self.is_paused = False  # 暂停状态
-        self.is_recording = True  # 记录状态
+        # 控制状态 - 默认暂停记录
+        self.is_paused = True  # 默认暂停状态
+        self.is_recording = False  # 记录状态
 
         # 确保CSV文件存在
         self.bluetooth_csv_path = "bluetooth_position_data.csv"
@@ -546,6 +546,41 @@ class MQTTDataProcessor:
             "bluetooth_count": self.bluetooth_id_counter,
             "location_count": self.location_id_counter
         }
+    
+    def calculate_location_for_visualization(self, bluetooth_results):
+        """计算位置用于可视化（不受记录状态影响）"""
+        try:
+            if not bluetooth_results:
+                return
+                
+            # 准备蓝牙读数数据
+            readings = []
+            for result in bluetooth_results:
+                readings.append({
+                    "mac": result["mac"],
+                    "rssi": result["rssi"]
+                })
+
+            # 计算位置
+            location_result = self.location_calculator.calculate_terminal_location(readings)
+
+            if location_result and location_result["status"] in ["success", "single_beacon", "fallback"]:
+                # 准备可视化数据（包含设备ID）
+                location_data = {
+                    "device_id": bluetooth_results[0]["device_id"],
+                    "longitude": location_result["longitude"],
+                    "latitude": location_result["latitude"],
+                    "accuracy": location_result["accuracy"],
+                    "beacon_count": location_result["beacon_count"],
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "calculation_method": location_result["method"]
+                }
+
+                # 传递位置数据给GUI用于可视化（始终执行）
+                self.fn_location(location_data) if self.fn_location else None
+
+        except Exception as e:
+            print(f"可视化位置计算出错: {str(e)}")
 
     def init_csv_files(self):
         # 初始化蓝牙数据CSV文件
@@ -594,17 +629,20 @@ class MQTTDataProcessor:
 
             with self.lock:
                 if topic.startswith("/device/blueTooth/station/"):
-                    # 检查是否暂停
+                    # 处理蓝牙数据（用于可视化，不受暂停状态影响）
+                    bluetooth_results = self.handle_bluetooth_position_data(
+                        payload)
+                    
+                    # 始终尝试计算位置用于可视化
+                    self.calculate_location_for_visualization(bluetooth_results)
+                    
+                    # 检查是否暂停记录
                     if self.is_paused:
-                        message = f"[{datetime.now().strftime('%H:%M:%S')}] 因暂停跳过数据处理"
+                        message = f"[{datetime.now().strftime('%H:%M:%S')}] 因暂停跳过数据记录 - 设备ID: {bluetooth_results[0]['device_id'] if bluetooth_results else 'Unknown'}"
                         print(message)
                         self.fn_message(message) if self.fn_message else None
                         return
                     
-                    # 处理蓝牙数据
-                    bluetooth_results = self.handle_bluetooth_position_data(
-                        payload)
-
                     # 为每个蓝牙数据项添加ID
                     for result in bluetooth_results:
                         result["id"] = self.bluetooth_id_counter
@@ -615,10 +653,10 @@ class MQTTDataProcessor:
                     # 保存到CSV
                     self.save_bluetooth_data_to_csv(bluetooth_results)
 
-                    # 计算终端位置
+                    # 计算并保存终端位置
                     self.calculate_and_save_location(bluetooth_results)
 
-                    message = f"[{datetime.now().strftime('%H:%M:%S')}] 蓝牙数据已处理，当前ID: {self.bluetooth_id_counter-1}"
+                    message = f"[{datetime.now().strftime('%H:%M:%S')}] 蓝牙数据已处理并记录，当前ID: {self.bluetooth_id_counter-1}, 设备: {bluetooth_results[0]['device_id']}"
                     print(message)
                     self.fn_message(message) if self.fn_message else None
 
@@ -720,8 +758,8 @@ class DataMonitorGUI:
         self.root.title("蓝牙信标定位监控系统")
         self.root.geometry("1200x800")
 
-        # 位置历史记录
-        self.location_history = []
+        # 位置历史记录 - 支持多设备
+        self.location_history = {}  # 改为字典，key为device_id
 
         self.setup_gui()
 
@@ -758,7 +796,7 @@ class DataMonitorGUI:
         self.location_label = ttk.Label(status_frame, text="位置计算数量: 0")
         self.location_label.pack(anchor=tk.W, pady=2)
 
-        self.status_label = ttk.Label(status_frame, text="状态: 正在记录", foreground="green")
+        self.status_label = ttk.Label(status_frame, text="状态: 已暂停", foreground="red")
         self.status_label.pack(anchor=tk.W, pady=2)
 
         # 消息日志
@@ -790,11 +828,11 @@ class DataMonitorGUI:
         button_row2.pack(fill=tk.X)
 
         self.pause_button = ttk.Button(
-            button_row2, text="暂停记录", command=self.pause_recording)
+            button_row2, text="暂停记录", command=self.pause_recording, state="disabled")
         self.pause_button.pack(side=tk.LEFT, padx=(0, 10))
 
         self.resume_button = ttk.Button(
-            button_row2, text="恢复记录", command=self.resume_recording, state="disabled")
+            button_row2, text="恢复记录", command=self.resume_recording)
         self.resume_button.pack(side=tk.LEFT, padx=(0, 10))
 
         self.stop_button = ttk.Button(
@@ -949,31 +987,45 @@ class DataMonitorGUI:
                     self.ax.annotate(mac[-4:], (info['longitude'], info['latitude']),
                                      xytext=(5, 5), textcoords='offset points', fontsize=8)
 
-                # 如果有位置历史记录，绘制终端轨迹
-                if self.location_history:
-                    # 绘制历史轨迹
-                    history_lons = [loc['longitude']
-                                    for loc in self.location_history]
-                    history_lats = [loc['latitude']
-                                    for loc in self.location_history]
+                # 如果有位置历史记录，绘制多设备轨迹
+                colors = ['red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+                all_lons = beacon_lons.copy()
+                all_lats = beacon_lats.copy()
+                
+                color_index = 0
+                for device_id, device_history in self.location_history.items():
+                    if not device_history:
+                        continue
+                        
+                    color = colors[color_index % len(colors)]
+                    color_index += 1
+                    
+                    # 绘制该设备的历史轨迹
+                    device_lons = [loc['longitude'] for loc in device_history]
+                    device_lats = [loc['latitude'] for loc in device_history]
+                    
+                    all_lons.extend(device_lons)
+                    all_lats.extend(device_lats)
 
-                    if len(history_lons) > 1:
-                        self.ax.plot(history_lons, history_lats,
-                                     'r-', alpha=0.6, linewidth=1, label='移动轨迹')
+                    if len(device_lons) > 1:
+                        self.ax.plot(device_lons, device_lats, color=color,
+                                     alpha=0.6, linewidth=2, label=f'设备{device_id}轨迹')
 
-                    # 绘制当前位置
-                    if self.location_history:
-                        current = self.location_history[-1]
+                    # 绘制该设备的当前位置
+                    if device_history:
+                        current = device_history[-1]
                         self.ax.scatter([current['longitude']], [current['latitude']],
-                                        c='red', s=150, marker='o', label='当前位置',
-                                        alpha=0.9, edgecolors='darkred')
+                                        c=color, s=150, marker='o', 
+                                        alpha=0.9, edgecolors='black', linewidth=2)
+                        
+                        # 添加设备ID标签
+                        self.ax.annotate(f'设备{device_id}', 
+                                        (current['longitude'], current['latitude']),
+                                        xytext=(10, 10), textcoords='offset points', 
+                                        fontsize=10, fontweight='bold',
+                                        bbox=dict(boxstyle='round,pad=0.3', facecolor=color, alpha=0.7))
 
                 # 设置合适的显示范围
-                all_lons = beacon_lons + [loc['longitude']
-                                          for loc in self.location_history]
-                all_lats = beacon_lats + [loc['latitude']
-                                          for loc in self.location_history]
-
                 if all_lons and all_lats:
                     lon_margin = (max(all_lons) - min(all_lons)) * 0.1 or 0.001
                     lat_margin = (max(all_lats) - min(all_lats)) * 0.1 or 0.001
@@ -1175,17 +1227,25 @@ class DataMonitorGUI:
 
     def add_location_to_history(self, location_data):
         """添加位置数据到历史记录"""
-        self.location_history.append({
+        device_id = location_data.get('device_id', 'Unknown')
+        
+        # 如果该设备ID不存在，创建新的历史记录列表
+        if device_id not in self.location_history:
+            self.location_history[device_id] = []
+        
+        # 添加位置数据
+        self.location_history[device_id].append({
             'longitude': location_data['longitude'],
             'latitude': location_data['latitude'],
             'timestamp': location_data['timestamp'],
             'accuracy': location_data['accuracy'],
-            'method': location_data['calculation_method']
+            'method': location_data['calculation_method'],
+            'device_id': device_id
         })
 
-        # 限制历史记录数量（保留最近100个位置）
-        if len(self.location_history) > 100:
-            self.location_history.pop(0)
+        # 限制每个设备的历史记录数量（保留最近100个位置）
+        if len(self.location_history[device_id]) > 100:
+            self.location_history[device_id].pop(0)
 
     def clear_location_history(self):
         """清空位置历史"""
@@ -1335,8 +1395,9 @@ class DataMonitorGUI:
             result = messagebox.askyesno("确认", "确定要停止数据记录并重置计数器吗？\n注意：这将重置ID计数器，但不会删除已有数据。")
             if result:
                 self.processor.stop_recording()
-                self.pause_button.config(state="normal")
-                self.resume_button.config(state="disabled")
+                # 停止后设置为暂停状态的按钮状态
+                self.pause_button.config(state="disabled")
+                self.resume_button.config(state="normal")
 
     def start_mqtt(self):
         if self.processor:
