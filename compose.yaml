@@ -1,0 +1,48 @@
+# Docker Compose for BLE Locator Server
+# - Builds the image from the local Dockerfile (uv-based), then runs the CLI via `uv run`
+# - Designed to run fully offline at runtime (dependencies are baked into the image during build)
+# - Mounts config and beacon folders so you can edit them on the host without rebuilding the image
+
+services:
+  ble-locator:
+    container_name: ble-locator
+    image: bluetooth-locator:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    working_dir: /app
+    # Environment variables override defaults from ConfigManager
+    environment:
+      - BLE_MQTT_IP=localhost
+      - BLE_MQTT_PORT=1883
+      - BLE_MQTT_TOPIC=/device/blueTooth/station/+
+      - BLE_PATH_BEACON_DB=/app/beacon/used.json
+      # Optional RSSI model overrides
+      # - BLE_RSSI_TX_POWER=-59
+      # - BLE_RSSI_PATH_LOSS=2.0
+      # - BLE_RSSI_A=-2.48
+      # - BLE_RSSI_B=67.81
+      # Optional optimization settings
+      # - BLE_OPT_USE_MULTI_START=true
+      # - BLE_OPT_NUM_STARTS=20
+      # - BLE_OPT_SEARCH_RADIUS=0.001
+    # Bind-mount local config and beacon data into the container
+    volumes:
+      - ./config:/app/config:ro
+      - ./beacon:/app/beacon
+    # No ports are exposed because this app connects to an MQTT broker as a client
+    command: ["uv", "run", "ble-locator-server", "run"]
+
+# Usage (PowerShell):
+#   docker compose build
+#   docker compose up -d
+#
+# For completely offline runtime:
+# 1) Build on a machine with internet
+#    docker compose build
+#    docker save bluetooth-locator:latest -o bluetooth-locator.tar
+# 2) Load on the offline machine
+#    docker load -i bluetooth-locator.tar
+# 3) Start services (compose will use the local image and skip build)
+#    docker compose up -d

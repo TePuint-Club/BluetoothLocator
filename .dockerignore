@@ -1,0 +1,43 @@
+# VCS
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Notebooks & outputs
+*.ipynb_checkpoints
+images/
+output/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Data / local configs (optional)
+config/
+beacon/
+backup/
+images/
+
+# Keep core project files (whitelist)
+!pyproject.toml
+!uv.lock
+!README.md
+!ble_locator_server/**
+
+# 算法测试文档
+*.ipynb

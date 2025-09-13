@@ -4,7 +4,18 @@ import os
 import yaml
 
 
-DEFAULT_CONFIG_PATH = os.environ.get(
+from typing import Callable, Any
+
+def _env_or_default(env_key: str, default: Any, cast: Callable[[str], Any] = str) -> Any:
+    v = os.environ.get(env_key)
+    if v is not None:
+        try:
+            return cast(v)
+        except Exception:
+            return v
+    return default
+
+DEFAULT_CONFIG_PATH = _env_or_default(
     "BLE_LOCATOR_CONFIG",
     os.path.join(".", "config", "config.yaml"),
 )
@@ -17,23 +28,23 @@ class ConfigManager:
         self.config_file = config_file or DEFAULT_CONFIG_PATH
         self.default_config = {
             "mqtt": {
-                "ip": "localhost",
-                "port": 1883,
-                "topic": "/device/blueTooth/station/+",
+                "ip": _env_or_default("BLE_MQTT_IP", "localhost"),
+                "port": _env_or_default("BLE_MQTT_PORT", 1883, int),
+                "topic": _env_or_default("BLE_MQTT_TOPIC", "/device/blueTooth/station/+"),
             },
             "rssi_model": {
-                "tx_power": -59,  # 1米处的RSSI值 (dBm)
-                "path_loss_exponent": 2.0,  # 路径损失指数
-                "a": -2.48,
-                "b": 67.81,
+                "tx_power": _env_or_default("BLE_RSSI_TX_POWER", -59, float),
+                "path_loss_exponent": _env_or_default("BLE_RSSI_PATH_LOSS", 2.0, float),
+                "a": _env_or_default("BLE_RSSI_A", -2.48, float),
+                "b": _env_or_default("BLE_RSSI_B", 67.81, float),
             },
             "optimization": {
-                "use_multi_start": True,
-                "num_starts": 20,
-                "search_radius": 0.001,
+                "use_multi_start": _env_or_default("BLE_OPT_USE_MULTI_START", True, lambda v: v.lower() in ("1","true","yes")),
+                "num_starts": _env_or_default("BLE_OPT_NUM_STARTS", 20, int),
+                "search_radius": _env_or_default("BLE_OPT_SEARCH_RADIUS", 0.001, float),
             },
             "paths": {
-                "beacon_db": os.path.join(".", "beacon", "used.json"),
+                "beacon_db": _env_or_default("BLE_PATH_BEACON_DB", os.path.join(".", "beacon", "used.json")),
             },
         }
         self.load_config()
