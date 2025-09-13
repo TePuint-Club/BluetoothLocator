@@ -88,14 +88,19 @@ class BeaconLocationCalculator:
         return readings
 
     def calculate_terminal_location(self, bluetooth_readings) -> Optional[LocationResult]:
-        """根据蓝牙读数计算终端位置（仅使用加权质心算法）。"""
+        """根据蓝牙读数计算终端位置：
+        - 0 个信标：返回 error
+        - 1 个信标：返回该信标位置（single_beacon）
+        - 2 个信标：使用加权质心
+        - >=3 个信标：使用 SciPy 最小化的三边定位；失败则回退加权质心
+        """
         if not bluetooth_readings:
             return None
 
         readings = self._normalize_readings(bluetooth_readings)
         beacon_positions: List[List[float]] = []  # [lat, lon]
         rssi_values: List[float] = []
-        distances: List[float] = []  # 仅用于给出一个粗略的accuracy
+        distances: List[float] = []  # 用于 trilateration 与 accuracy
 
         for reading in readings:
             b = self.beacon_store.get(reading.mac)
@@ -109,9 +114,50 @@ class BeaconLocationCalculator:
         if beacon_count == 0:
             return LocationResult(status="error", message="没有找到已知位置的信标", beacon_count=0)
 
-        result = self.weighted_centroid(beacon_positions, rssi_values)
-        if not result:
-            return LocationResult(status="error", message="加权质心计算失败", beacon_count=beacon_count)
+        # 仅一个信标：直接返回该信标位置，accuracy 取估算距离
+        if beacon_count == 1:
+            lat, lon = beacon_positions[0]
+            accuracy = distances[0] if distances else None
+            return LocationResult(
+                status="single_beacon",
+                latitude=float(lat),
+                longitude=float(lon),
+                accuracy=accuracy,
+                beacon_count=1,
+                method="single_beacon",
+            )
+
+        # 两个信标：采用加权质心
+        if beacon_count == 2:
+            result = self.weighted_centroid(beacon_positions, rssi_values)
+            if not result:
+                return LocationResult(status="error", message="加权质心计算失败", beacon_count=2)
+            accuracy = (sum(distances) / len(distances)) if distances else None
+            return LocationResult(
+                status="success",
+                latitude=float(result[0]),
+                longitude=float(result[1]),
+                accuracy=accuracy,
+                beacon_count=2,
+                method="weighted_centroid",
+            )
+
+        # 三个及以上：SciPy 三边定位
+        result = self.scipy_trilateration(beacon_positions, distances)
+        if result is None:
+            # 回退到加权质心
+            wc = self.weighted_centroid(beacon_positions, rssi_values)
+            if wc is None:
+                return LocationResult(status="error", message="定位失败（三边与回退均失败）", beacon_count=beacon_count)
+            accuracy = (sum(distances) / len(distances)) if distances else None
+            return LocationResult(
+                status="fallback",
+                latitude=float(wc[0]),
+                longitude=float(wc[1]),
+                accuracy=accuracy,
+                beacon_count=beacon_count,
+                method="weighted_centroid_fallback",
+            )
 
         accuracy = (sum(distances) / len(distances)) if distances else None
         return LocationResult(
@@ -120,5 +166,76 @@ class BeaconLocationCalculator:
             longitude=float(result[1]),
             accuracy=accuracy,
             beacon_count=beacon_count,
-            method="weighted_centroid",
+            method="scipy_trilateration",
         )
+
+    # ---------- Helper methods for trilateration ----------
+    @staticmethod
+    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """两点球面距离（米）。"""
+        R = 6_371_000.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    @staticmethod
+    def _weight(d: float, mu: float = 6.0, sigma: float = 3.0) -> float:
+        """距离权重，弱化远距离误差影响。"""
+        return 0.5 + 0.5 * math.exp(-((d - mu) ** 2) / (2 * sigma ** 2))
+
+    def scipy_trilateration(self, beacon_positions: List[List[float]], distances: List[float]) -> Optional[List[float]]:
+        """使用 SciPy 最小化拟合坐标，使预测距离与测距距离残差平方和最小。"""
+        if len(beacon_positions) < 3 or len(distances) < 3:
+            return None
+
+        # 延迟导入 SciPy，若环境缺失则返回 None 以便上层回退
+        try:
+            from scipy.optimize import minimize  # type: ignore
+        except Exception:
+            return None
+
+        # 初始点：信标质心（使用原生 list，避免 numpy 依赖）
+        lats = [p[0] for p in beacon_positions]
+        lons = [p[1] for p in beacon_positions]
+        x0 = [sum(lats) / len(lats), sum(lons) / len(lons)]
+
+        def objective(point) -> float:
+            lat, lon = float(point[0]), float(point[1])
+            total = 0.0
+            for (blat, blon), d in zip(beacon_positions, distances):
+                pred = self.haversine_distance(lat, lon, blat, blon)
+                diff = pred - d
+                total += (diff * diff) * self._weight(pred)
+            return total
+
+        # 先用 L-BFGS-B，再尝试 Powell 提高鲁棒性
+        methods = ["L-BFGS-B", "Powell"]
+        best_x = None
+        best_fun = float("inf")
+        for m in methods:
+            try:
+                res = minimize(objective, x0, method=m)
+                if res.success and res.fun < best_fun:
+                    best_fun = float(res.fun)
+                    best_x = res.x
+            except Exception:
+                continue
+
+        if best_x is None:
+            return None
+
+        lat, lon = float(best_x[0]), float(best_x[1])
+        # 简单合理性校验
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return None
+        # 不要离任一信标过远（> 2km）
+        max_dist = 0.0
+        for blat, blon in beacon_positions:
+            max_dist = max(max_dist, self.haversine_distance(lat, lon, blat, blon))
+        if max_dist > 2000.0:
+            return None
+        return [lat, lon]
