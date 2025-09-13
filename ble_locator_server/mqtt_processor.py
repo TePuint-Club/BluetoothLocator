@@ -28,7 +28,8 @@ class MQTTDataProcessor:
         # 信标与计算器
         self.beacon_store = BeaconStore(self.config_manager)
         self.beacon_store.load()
-        self.location_calculator = BeaconLocationCalculator(self.config_manager, self.beacon_store)
+        self.location_calculator = BeaconLocationCalculator(
+            self.config_manager, self.beacon_store)
 
         # 过滤器
         self.data_processing_service = Filter()
@@ -62,7 +63,8 @@ class MQTTDataProcessor:
                     latitude=float(lr_filtered.latitude),
                     accuracy=lr_filtered.accuracy,
                     beacon_count=lr_filtered.beacon_count,
-                    timestamp=record.timestamp or lr_filtered.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    timestamp=record.timestamp or lr_filtered.timestamp or datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S"),
                     calculation_method=lr_filtered.method,
                 )
                 logger.info(
@@ -74,7 +76,8 @@ class MQTTDataProcessor:
                 )
                 return location_data
             else:
-                logger.warning("位置计算失败: %s", lr_filtered.message or "状态不成功或坐标缺失")
+                logger.warning(
+                    "位置计算失败: %s", lr_filtered.message or "状态不成功或坐标缺失")
                 return None
         except Exception as e:
             logger.exception("位置计算出错: %s", e)
@@ -130,23 +133,11 @@ class MQTTDataProcessor:
     def on_message(self, client, userdata, msg):
         try:
             payload = msg.payload.decode("utf-8")
-            parts = payload.split(";")
-            processed_parts = []
-            for part in parts[:-1]:
-                items = part.split(",")
-                if len(items) == 3:
-                    items[0] = items[0].lstrip("0")
-                    processed_parts.append(",".join(items))
-                else:
-                    processed_parts.append(part)
-            processed_payload = ";".join(processed_parts) + ";" + parts[-1]
-            logger.debug("收到消息 内容: %s", processed_payload)
             with self.lock:
-                record = BluetoothRecord.parse(processed_payload)
+                record = BluetoothRecord.parse(payload)
                 if record is None or not record.macs:
-                    logger.warning("消息解析无有效信标数据: %s", processed_payload)
+                    logger.warning("消息解析无有效信标数据: %s", payload)
                     return
                 _ = self.calculate_location(record)
         except Exception as e:
             logger.exception("处理消息时出错: %s", e)
-            

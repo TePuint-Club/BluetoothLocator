@@ -9,9 +9,12 @@
 """
 
 from ble_locator_server.cli import main as _cli_main
+from ble_locator_server.cli import setup_logging as _setup_logging
 
 
 def main():
+    # 确保直接运行也有全局日志输出
+    _setup_logging()
     _cli_main()
 
 
