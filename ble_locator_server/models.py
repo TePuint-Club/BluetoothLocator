@@ -81,3 +81,67 @@ class LocationData:
     beacon_count: int
     timestamp: str
     calculation_method: str
+
+
+@dataclass(frozen=True)
+class PositionProtocolData:
+    """
+    泛源定位协议数据结构
+    Topic: BD_FANYUAN_POSITION_TOPIC
+    格式：设备ID,经度,纬度,高度,预留,预留,预留,楼层,方向,步数,距离,状态,报警类型,电量,卫星解的类型,信号质量
+    """
+    device_id: int  # 设备ID, %4d, 1-9999
+    longitude: float  # 经度, %14.10f, WGS84坐标系
+    latitude: float  # 纬度, %14.10f, WGS84坐标系
+    altitude: float = 0.0  # 高度, %8.2f, 米
+    reserved1: float = 0.0  # 预留, %14.2f
+    reserved2: float = 0.0  # 预留, %14.2f
+    reserved3: float = 0.0  # 预留, %8.2f
+    floor: str = "1"  # 楼层, （-2，-1，1，2，2A，3）
+    direction: float = 0.0  # 方向, %8.2f, 度，以北为0度，取值范围0~360
+    steps: int = 0  # 步数, 行走步数
+    distance: int = 0  # 距离, 行走距离
+    status: int = 0  # 状态, 0、静止；1、行走；2、跑步；3、电梯；4、扶梯；5、楼梯；6、SOS；7、自定义
+    alarm_type: int = 0  # 报警类型, 1、聚集；2、越界；3、摔倒；4坠楼；5、超速、6、长时间静止报警；7、一键报警；8、自定义
+    battery: int = 100  # 电量, 0~100
+    satellite_type: int = 1  # 卫星解的类型, 0=未定位，1=单点定位，2=伪距/SBAS，4固定解，5浮点解
+    signal_quality: float = 1.0  # 信号质量
+
+    @classmethod
+    def from_location_data(cls, location_data: LocationData) -> "PositionProtocolData":
+        """从LocationData转换为PositionProtocolData"""
+        try:
+            device_id_int = int(location_data.device_id)
+        except ValueError:
+            # 如果device_id不是数字，使用hash值的后4位
+            device_id_int = hash(location_data.device_id) % 10000
+            if device_id_int < 1:
+                device_id_int = 1
+        
+        return cls(
+            device_id=device_id_int,
+            longitude=location_data.longitude,
+            latitude=location_data.latitude,
+            altitude=0.0,  # 默认高度
+            satellite_type=1 if location_data.accuracy else 0,  # 有精度信息则认为已定位
+            signal_quality=1.0 / (location_data.accuracy + 1) if location_data.accuracy else 1.0
+        )
+
+    def to_protocol_string(self) -> str:
+        """转换为协议格式字符串"""
+        return (f"{self.device_id:4d},"
+                f"{self.longitude:14.10f},"
+                f"{self.latitude:14.10f},"
+                f"{self.altitude:8.2f},"
+                f"{self.reserved1:14.2f},"
+                f"{self.reserved2:14.2f},"
+                f"{self.reserved3:8.2f},"
+                f"{self.floor},"
+                f"{self.direction:8.2f},"
+                f"{self.steps},"
+                f"{self.distance},"
+                f"{self.status},"
+                f"{self.alarm_type},"
+                f"{self.battery},"
+                f"{self.satellite_type},"
+                f"{self.signal_quality}")

@@ -10,7 +10,7 @@ import paho.mqtt.client as mqtt
 from .config_manager import ConfigManager
 from .calculator import BeaconLocationCalculator
 from .beacon_store import BeaconStore
-from .models import BeaconReading, BluetoothRecord, LocationData
+from .models import BeaconReading, BluetoothRecord, LocationData, PositionProtocolData
 from .filters import Filter
 
 
@@ -140,8 +140,9 @@ class MQTTDataProcessor:
                     return
                 location_data = self.calculate_location(record)
                 if location_data:
-                    accuracy_str = str(location_data.accuracy) if location_data.accuracy is not None else ""
-                    message = f"{location_data.device_id},{location_data.longitude},{location_data.latitude},{accuracy_str},{location_data.beacon_count},{location_data.timestamp},{location_data.calculation_method}"
+                    # 转换为协议格式
+                    protocol_data = PositionProtocolData.from_location_data(location_data)
+                    message = protocol_data.to_protocol_string()
                     self.client.publish("BD_FANYUAN_POSITION_TOPIC", message)
                     logger.info("已发布位置数据到topic: BD_FANYUAN_POSITION_TOPIC - %s", message)
         except Exception as e:
