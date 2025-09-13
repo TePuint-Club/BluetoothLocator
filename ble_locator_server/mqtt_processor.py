@@ -138,6 +138,11 @@ class MQTTDataProcessor:
                 if record is None or not record.macs:
                     logger.warning("消息解析无有效信标数据: %s", payload)
                     return
-                _ = self.calculate_location(record)
+                location_data = self.calculate_location(record)
+                if location_data:
+                    accuracy_str = str(location_data.accuracy) if location_data.accuracy is not None else ""
+                    message = f"{location_data.device_id},{location_data.longitude},{location_data.latitude},{accuracy_str},{location_data.beacon_count},{location_data.timestamp},{location_data.calculation_method}"
+                    self.client.publish("BD_FANYUAN_POSITION_TOPIC", message)
+                    logger.info("已发布位置数据到topic: BD_FANYUAN_POSITION_TOPIC - %s", message)
         except Exception as e:
             logger.exception("处理消息时出错: %s", e)
