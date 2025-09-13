@@ -1,5 +1,9 @@
 # 蓝牙定位器
 
+::: warning 警告
+可视化界面在backup目录下，程序专为服务器实现，相关代码均放在`ble_locator_server`目录下。
+:::
+
 为了方便调试mqtt发送过来的蓝牙数据，临时写的小程序。
 
 通过MQTT接收数据，并将原始数据、定位数据分别保存到 `bluetooth\\\_position\\\_data.csv` 和 `terminal\\\_locations.csv` 下，也可以可视化。

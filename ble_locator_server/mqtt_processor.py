@@ -141,9 +141,9 @@ class MQTTDataProcessor:
                 location_data = self.calculate_location(record)
                 if location_data:
                     # 转换为协议格式
-                    protocol_data = PositionProtocolData.from_location_data(location_data)
+                    protocol_data = PositionProtocolData.from_location_data(
+                        location_data)
                     message = protocol_data.to_protocol_string()
                     self.client.publish("BD_FANYUAN_POSITION_TOPIC", message)
-                    logger.info("已发布位置数据到topic: BD_FANYUAN_POSITION_TOPIC - %s", message)
         except Exception as e:
             logger.exception("处理消息时出错: %s", e)

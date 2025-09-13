@@ -48,7 +48,8 @@ class BeaconStore:
         with open(beacon_file_path, "w", encoding="utf-8") as f:
             json.dump(sample, f, indent=2, ensure_ascii=False)
         self._beacons = {
-            mac: Beacon(mac=mac, latitude=info["latitude"], longitude=info["longitude"], altitude=info.get("altitude", 0.0))
+            mac: Beacon(mac=mac, latitude=info["latitude"], longitude=info["longitude"], altitude=info.get(
+                "altitude", 0.0))
             for mac, info in sample.items()
         }
 
@@ -60,7 +61,8 @@ class BeaconStore:
         assert isinstance(beacon_file_path, str)
         os.makedirs(os.path.dirname(beacon_file_path) or ".", exist_ok=True)
         raw = {
-            mac: {"longitude": b.longitude, "latitude": b.latitude, "altitude": b.altitude}
+            mac: {"longitude": b.longitude,
+                  "latitude": b.latitude, "altitude": b.altitude}
             for mac, b in self._beacons.items()
         }
         with open(beacon_file_path, "w", encoding="utf-8") as f:

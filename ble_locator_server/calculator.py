@@ -33,7 +33,8 @@ class BeaconLocationCalculator:
         self.path_loss_exponent = path_loss_exponent
         self.a = a
         self.b = b
-        self.config_manager.set_rssi_model_config(tx_power, path_loss_exponent, a, b)
+        self.config_manager.set_rssi_model_config(
+            tx_power, path_loss_exponent, a, b)
 
     def rssi_to_distance(self, rssi: float, method: str = "improved", tx_power=None, path_loss_exponent=None, b=None, a=None) -> float:
         if tx_power is None:
@@ -69,12 +70,16 @@ class BeaconLocationCalculator:
             weight = max(0, rssi + 70)
             weights.append(weight)
         if sum(weights) == 0:
-            lat = sum(pos[0] for pos in beacon_positions) / len(beacon_positions)
-            lon = sum(pos[1] for pos in beacon_positions) / len(beacon_positions)
+            lat = sum(pos[0]
+                      for pos in beacon_positions) / len(beacon_positions)
+            lon = sum(pos[1]
+                      for pos in beacon_positions) / len(beacon_positions)
         else:
             total_weight = sum(weights)
-            lat = sum(pos[0] * w for pos, w in zip(beacon_positions, weights)) / total_weight
-            lon = sum(pos[1] * w for pos, w in zip(beacon_positions, weights)) / total_weight
+            lat = sum(pos[0] * w for pos,
+                      w in zip(beacon_positions, weights)) / total_weight
+            lon = sum(pos[1] * w for pos,
+                      w in zip(beacon_positions, weights)) / total_weight
         return [lat, lon]
 
     def _normalize_readings(self, bluetooth_readings) -> List[BeaconReading]:
@@ -84,7 +89,8 @@ class BeaconLocationCalculator:
             if isinstance(r, BeaconReading):
                 readings.append(r)
             elif isinstance(r, dict) and "mac" in r and "rssi" in r:
-                readings.append(BeaconReading(mac=str(r["mac"]), rssi=int(r["rssi"])) )
+                readings.append(BeaconReading(
+                    mac=str(r["mac"]), rssi=int(r["rssi"])))
         return readings
 
     def calculate_terminal_location(self, bluetooth_readings) -> Optional[LocationResult]:
@@ -178,7 +184,8 @@ class BeaconLocationCalculator:
         phi2 = math.radians(lat2)
         dphi = math.radians(lat2 - lat1)
         dlambda = math.radians(lon2 - lon1)
-        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * \
+            math.cos(phi2) * math.sin(dlambda / 2) ** 2
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         return R * c
 
@@ -235,7 +242,8 @@ class BeaconLocationCalculator:
         # 不要离任一信标过远（> 2km）
         max_dist = 0.0
         for blat, blon in beacon_positions:
-            max_dist = max(max_dist, self.haversine_distance(lat, lon, blat, blon))
+            max_dist = max(max_dist, self.haversine_distance(
+                lat, lon, blat, blon))
         if max_dist > 2000.0:
             return None
         return [lat, lon]

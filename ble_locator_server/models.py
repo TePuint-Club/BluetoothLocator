@@ -90,7 +90,7 @@ class PositionProtocolData:
     Topic: BD_FANYUAN_POSITION_TOPIC
     格式：设备ID,经度,纬度,高度,预留,预留,预留,楼层,方向,步数,距离,状态,报警类型,电量,卫星解的类型,信号质量
     """
-    device_id: int  # 设备ID, %4d, 1-9999
+    device_id: str  # 设备ID, %4d, 1-9999
     longitude: float  # 经度, %14.10f, WGS84坐标系
     latitude: float  # 纬度, %14.10f, WGS84坐标系
     altitude: float = 0.0  # 高度, %8.2f, 米
@@ -109,17 +109,9 @@ class PositionProtocolData:
 
     @classmethod
     def from_location_data(cls, location_data: LocationData) -> "PositionProtocolData":
-        """从LocationData转换为PositionProtocolData"""
-        try:
-            device_id_int = int(location_data.device_id)
-        except ValueError:
-            # 如果device_id不是数字，使用hash值的后4位
-            device_id_int = hash(location_data.device_id) % 10000
-            if device_id_int < 1:
-                device_id_int = 1
-        
+        """从LocationData转换为PositionProtocolData"""        
         return cls(
-            device_id=device_id_int,
+            device_id=location_data.device_id,
             longitude=location_data.longitude,
             latitude=location_data.latitude,
             altitude=0.0,  # 默认高度
@@ -129,15 +121,15 @@ class PositionProtocolData:
 
     def to_protocol_string(self) -> str:
         """转换为协议格式字符串"""
-        return (f"{self.device_id:4d},"
-                f"{self.longitude:14.10f},"
-                f"{self.latitude:14.10f},"
-                f"{self.altitude:8.2f},"
-                f"{self.reserved1:14.2f},"
-                f"{self.reserved2:14.2f},"
-                f"{self.reserved3:8.2f},"
+        return (f"{self.device_id},"
+                f"{self.longitude:.10f},"
+                f"{self.latitude:.10f},"
+                f"{self.altitude:.2f},"
+                f"{self.reserved1:.2f},"
+                f"{self.reserved2:.2f},"
+                f"{self.reserved3:.2f},"
                 f"{self.floor},"
-                f"{self.direction:8.2f},"
+                f"{self.direction:.2f},"
                 f"{self.steps},"
                 f"{self.distance},"
                 f"{self.status},"
