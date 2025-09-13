@@ -34,8 +34,6 @@ class ConfigManager:
             },
             "paths": {
                 "beacon_db": os.path.join(".", "beacon", "used.json"),
-                "locations_csv": os.path.join(".", "output", "terminal_locations.csv"),
-                "bluetooth_csv": os.path.join(".", "other_data", "bluetooth_position_data.csv"),
                 "data_path_json": os.path.join(".", "config", "bluetooth_data.json"),
             },
         }
