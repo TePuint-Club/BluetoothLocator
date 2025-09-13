@@ -16,3 +16,7 @@ bluetooth_position_data.csv
 terminal_locations.csv
 config.yaml
 bridge.py
+other_data/
+output/
+beacon/
+config/
