@@ -34,7 +34,6 @@ class ConfigManager:
             },
             "paths": {
                 "beacon_db": os.path.join(".", "beacon", "used.json"),
-                "data_path_json": os.path.join(".", "config", "bluetooth_data.json"),
             },
         }
         self.load_config()
