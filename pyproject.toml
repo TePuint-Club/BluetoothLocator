@@ -8,11 +8,64 @@ dependencies = [
     "paho-mqtt>=1.6.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
-    # "matplotlib>=3.10.3",
-    # "pyinstaller>=6.14.2",
     "pyyaml>=6.0.2",
     "scipy>=1.16.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5.0",
+    "black>=24.3.0",
+    "mypy>=1.10.0",
+    "pytest>=8.2.0",
+    "build>=1.2.1",
+    "twine>=5.1.1",
+]
+
+[project.urls]
+homepage = "https://github.com/TePuint-Club/BluetoothLocator"
+repository = "https://github.com/TePuint-Club/BluetoothLocator"
+issues = "https://github.com/TePuint-Club/BluetoothLocator/issues"
+
 [project.scripts]
 ble-locator-server = "ble_locator_server.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ble_locator_server*"]
+exclude = ["**/__pycache__"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+lint.select = ["E", "F", "I", "W"]
+lint.ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+disallow_untyped_defs = false
+exclude = ["^build/", "^dist/", "^.venv/"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-q"
+testpaths = ["tests"]
