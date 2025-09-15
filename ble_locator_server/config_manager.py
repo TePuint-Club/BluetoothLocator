@@ -44,7 +44,7 @@ class ConfigManager:
                 "search_radius": _env_or_default("BLE_OPT_SEARCH_RADIUS", 0.001, float),
             },
             "paths": {
-                "beacon_db": _env_or_default("BLE_PATH_BEACON_DB", os.path.join(".", "beacon", "used.json")),
+                "beacon_db": _env_or_default("BLE_PATH_BEACON_DB", os.path.join(".", "beacon", "used.csv")),
             },
         }
         self.load_config()
@@ -98,6 +98,9 @@ class ConfigManager:
 
     def get_paths(self):
         return self.config.get("paths", {})
+
+    def get_beacon_db_path(self):
+        return self.get_paths()["beacon_db"]
 
     def set_mqtt_config(self, ip, port, topic=None):
         self.config["mqtt"]["ip"] = ip
