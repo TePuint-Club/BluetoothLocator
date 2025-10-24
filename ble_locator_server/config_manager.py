@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import yaml
 
-
 from typing import Callable, Any
+
 
 def _env_or_default(env_key: str, default: Any, cast: Callable[[str], Any] = str) -> Any:
     v = os.environ.get(env_key)
@@ -14,6 +14,7 @@ def _env_or_default(env_key: str, default: Any, cast: Callable[[str], Any] = str
         except Exception:
             return v
     return default
+
 
 DEFAULT_CONFIG_PATH = _env_or_default(
     "BLE_LOCATOR_CONFIG",
@@ -30,7 +31,8 @@ class ConfigManager:
             "mqtt": {
                 "ip": _env_or_default("BLE_MQTT_IP", "localhost"),
                 "port": _env_or_default("BLE_MQTT_PORT", 1883, int),
-                "topic": _env_or_default("BLE_MQTT_TOPIC", "/device/blueTooth/station/+"),
+                "uplink_topic": _env_or_default("BLE_MQTT_UPLINK_TOPIC", "/device/location/{deviceId}"),
+                "downlink_topic": _env_or_default("BLE_MQTT_DOWNLINK_TOPIC", "/device/blueTooth/station/+"),
             },
             "rssi_model": {
                 "tx_power": _env_or_default("BLE_RSSI_TX_POWER", -59, float),
@@ -39,12 +41,16 @@ class ConfigManager:
                 "b": _env_or_default("BLE_RSSI_B", 67.81, float),
             },
             "optimization": {
-                "use_multi_start": _env_or_default("BLE_OPT_USE_MULTI_START", True, lambda v: v.lower() in ("1","true","yes")),
+                "use_multi_start": _env_or_default(
+                    "BLE_OPT_USE_MULTI_START", True, lambda v: v.lower() in ("1", "true", "yes")
+                ),
                 "num_starts": _env_or_default("BLE_OPT_NUM_STARTS", 20, int),
                 "search_radius": _env_or_default("BLE_OPT_SEARCH_RADIUS", 0.001, float),
             },
             "paths": {
-                "beacon_db": _env_or_default("BLE_PATH_BEACON_DB", os.path.join(".", "beacon", "used.csv")),
+                "beacon_db": _env_or_default(
+                    "BLE_PATH_BEACON_DB", os.path.join(".", "beacon", "used.csv")
+                ),
             },
         }
         self.load_config()
@@ -102,14 +108,16 @@ class ConfigManager:
     def get_beacon_db_path(self):
         return self.get_paths()["beacon_db"]
 
-    def set_mqtt_config(self, ip, port, topic=None):
+    def set_mqtt_config(self, ip, port, uplink_topic=None, downlink_topic=None):
         self.config["mqtt"]["ip"] = ip
         self.config["mqtt"]["port"] = port
-        if topic is not None:
-            self.config["mqtt"]["topic"] = topic
+        if uplink_topic is not None:
+            self.config["mqtt"]["uplink_topic"] = uplink_topic
+        if downlink_topic is not None:
+            self.config["mqtt"]["downlink_topic"] = downlink_topic
         self.save_config()
 
-    def set_rssi_model_config(self, tx_power, path_loss_exponent, a, b):
+    def set_rssi_model_config(self, tx_power: float, path_loss_exponent: float, a: float, b: float):
         self.config["rssi_model"]["tx_power"] = tx_power
         self.config["rssi_model"]["path_loss_exponent"] = path_loss_exponent
         self.config["rssi_model"]["a"] = a

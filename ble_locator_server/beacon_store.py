@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import os
 from typing import Dict, Optional, cast
 
-import pandas as pd  # 新增
+import pandas as pd
 
-from .models import Beacon
+from .models import Beacon, BluetoothRecord
 from .config_manager import ConfigManager
 
 
@@ -17,8 +15,7 @@ class BeaconStore:
         self._df = pd.DataFrame(columns=["longitude", "latitude", "altitude"])
         self._df.index.name = "mac"
         self._config = config_manager or ConfigManager()
-        
-    # ---- Utils ----
+
     def _normalize_df(self, df: pd.DataFrame) -> pd.DataFrame:
         if "mac" not in df.columns:
             raise KeyError("CSV 文件缺少 'mac' 列")
@@ -31,7 +28,9 @@ class BeaconStore:
         # 选择列、去重、设索引与类型
         df = df[["mac", "longitude", "latitude", "altitude"]]
         df = df.drop_duplicates(subset=["mac"], keep="last").set_index("mac")
-        df = df.astype({"longitude": "float64", "latitude": "float64", "altitude": "float64"}, copy=False)
+        df = df.astype(
+            {"longitude": "float64", "latitude": "float64", "altitude": "float64"}, copy=False
+        )
         df.index.name = "mac"
         df.index = df.index.astype(str)
         return df.sort_index()
@@ -52,9 +51,9 @@ class BeaconStore:
     def _create_sample(self, beacon_file_path: Optional[str] = None):
         csv_path = beacon_file_path or self._config.get_beacon_db_path()
         os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-        df = pd.DataFrame([
-            {"mac": "EXAMPLE-BEACON", "longitude": 120.0, "latitude": 31.0, "altitude": 0.0}
-        ])
+        df = pd.DataFrame(
+            [{"mac": "EXAMPLE-BEACON", "longitude": 120.0, "latitude": 31.0, "altitude": 0.0}]
+        )
         # 内存结构：索引为 mac
         self._df = self._normalize_df(df)
         # 保存为 CSV（将索引写为列 mac）
@@ -110,15 +109,17 @@ class BeaconStore:
             altitude=float(row.at["altitude"]) if "altitude" in row else 0.0,
         )
 
+    def get_from_record(self, record: BluetoothRecord) -> list[Beacon | None]:
+        return [self.get(reading.mac) for reading in record]
+
     def all(self) -> Dict[str, Beacon]:
         result: Dict[str, Beacon] = {}
         for mac_key, row in self._df.iterrows():
-            row_s = cast(pd.Series, row)
             mac_str = str(mac_key)
             result[mac_str] = Beacon(
                 mac=mac_str,
-                latitude=float(row_s.at["latitude"]),
-                longitude=float(row_s.at["longitude"]),
-                altitude=float(row_s.at["altitude"]) if "altitude" in row_s else 0.0,
+                latitude=float(row.at["latitude"]),
+                longitude=float(row.at["longitude"]),
+                altitude=float(row.at["altitude"]) if "altitude" in row else 0.0,
             )
         return result

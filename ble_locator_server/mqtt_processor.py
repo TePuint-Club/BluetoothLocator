@@ -6,11 +6,12 @@ import threading
 from typing import List, Optional
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.client import MQTTMessage
 
 from .config_manager import ConfigManager
 from .calculator import BeaconLocationCalculator
 from .beacon_store import BeaconStore
-from .models import BeaconReading, BluetoothRecord, LocationData, PositionProtocolData
+from .models import BluetoothRecord, LocationResult, LocationResultStatus, PositionProtocolData
 from .filters import Filter
 
 
@@ -18,66 +19,45 @@ logger = logging.getLogger(__name__)
 
 
 class MQTTDataProcessor:
-    def __init__(self, config_manager: Optional[ConfigManager] = None):
-        # 仅保留实时处理所需的状态
+    def __init__(self, config_manager: ConfigManager):
         self.lock = threading.Lock()
-        self.config_manager = config_manager or ConfigManager()
-        # 记录/暂停逻辑与持久化已移除
-        self.current_topic = None
+        self.config_manager = config_manager
 
         # 信标与计算器
         self.beacon_store = BeaconStore(self.config_manager)
         self.beacon_store.load()
-        self.location_calculator = BeaconLocationCalculator(
-            self.config_manager, self.beacon_store)
+        self.location_calculator = BeaconLocationCalculator(self.config_manager, self.beacon_store)
 
         # 过滤器
-        self.data_processing_service = Filter()
+        self.data_processing_service: dict[str, Filter] = {}
 
     # ---------- Core processing ----------
-    def calculate_location(self, record: BluetoothRecord) -> Optional[LocationData]:
+    def calculate_location(self, record: BluetoothRecord) -> Optional[LocationResult]:
         try:
-            # 将 BluetoothRecord 转为 BeaconReading 列表
-            readings: List[BeaconReading] = [
-                BeaconReading(mac=mac, rssi=int(rssi)) for mac, rssi in zip(record.macs, record.rssis)
-            ]
-
             # 计算位置（LocationResult）
-            lr = self.location_calculator.calculate_terminal_location(readings)
-            if lr is None:
-                logger.warning("位置计算失败: 计算返回None")
-                return None
+            lr = self.location_calculator.calculate_terminal_location(record)
 
             # 标记时间戳，进入滤波
             lr.timestamp = lr.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            lr_filtered = self.data_processing_service.filter(lr)
-            if lr_filtered is None:
-                logger.warning("位置计算失败: 滤波返回None")
-                return None
+            
+            # 为每个设备创建独立的滤波器
+            device_id = record.device_id
+            if device_id not in self.data_processing_service:
+                self.data_processing_service[device_id] = Filter()
+            
+            lr_filtered = self.data_processing_service[device_id].filter(lr)
 
-            if lr_filtered.status in ["success", "single_beacon", "fallback"] and \
-               lr_filtered.latitude is not None and lr_filtered.longitude is not None:
-                location_data = LocationData(
-                    device_id=record.device_id,
-                    longitude=float(lr_filtered.longitude),
-                    latitude=float(lr_filtered.latitude),
-                    accuracy=lr_filtered.accuracy,
-                    beacon_count=lr_filtered.beacon_count,
-                    timestamp=record.timestamp or lr_filtered.timestamp or datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"),
-                    calculation_method=lr_filtered.method,
-                )
+            if lr_filtered.status is LocationResultStatus.SUCCESS:
                 logger.info(
                     "位置计算成功: (%.6f, %.6f), 方法: %s, 信标数: %s",
-                    location_data.latitude,
-                    location_data.longitude,
-                    location_data.calculation_method,
-                    location_data.beacon_count,
+                    lr_filtered.latitude,
+                    lr_filtered.longitude,
+                    lr_filtered.method,
+                    lr_filtered.beacon_count,
                 )
-                return location_data
+                return lr_filtered
             else:
-                logger.warning(
-                    "位置计算失败: %s", lr_filtered.message or "状态不成功或坐标缺失")
+                logger.warning("位置计算失败: %s", lr_filtered.message or "状态不成功或坐标缺失")
                 return None
         except Exception as e:
             logger.exception("位置计算出错: %s", e)
@@ -91,6 +71,7 @@ class MQTTDataProcessor:
         try:
             mqtt_config = self.config_manager.get_mqtt_config()
             self.client.connect(mqtt_config["ip"], mqtt_config["port"], 60)
+            logger.info("连接到MQTT服务器 %s:%s", mqtt_config["ip"], mqtt_config["port"])
             self.client.loop_forever()
         except Exception as e:
             logger.error("MQTT连接错误: %s", e)
@@ -104,46 +85,33 @@ class MQTTDataProcessor:
             except Exception as e:
                 logger.error("断开MQTT连接时出错: %s", e)
 
-    def change_mqtt_topic(self, new_topic: str) -> bool:
-        if hasattr(self, "client") and self.client and self.current_topic:
-            try:
-                self.client.unsubscribe(self.current_topic)
-                logger.info("已取消订阅主题: %s", self.current_topic)
-                self.client.subscribe(new_topic)
-                self.current_topic = new_topic
-                logger.info("已订阅新主题: %s", new_topic)
-                return True
-            except Exception as e:
-                logger.error("更改主题订阅时出错: %s", e)
-                return False
-        return False
-
     # ---------- MQTT handlers ----------
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             logger.info("成功连接到MQTT服务器")
             mqtt_config = self.config_manager.get_mqtt_config()
-            topic = mqtt_config.get("topic", "/device/blueTooth/station/+")
+            topic = mqtt_config.get("downlink_topic", "/device/blueTooth/station/+")
             client.subscribe(topic)
             self.current_topic = topic
             logger.info("已订阅主题: %s", topic)
         else:
             logger.error("连接失败，返回码: %s", rc)
 
-    def on_message(self, client, userdata, msg):
+    def on_message(self, client, userdata, msg: MQTTMessage):
         try:
             payload = msg.payload.decode("utf-8")
             with self.lock:
                 record = BluetoothRecord.parse(payload)
-                if record is None or not record.macs:
+                if record is None or record.is_empty:
                     logger.warning("消息解析无有效信标数据: %s", payload)
                     return
                 location_data = self.calculate_location(record)
                 if location_data:
                     # 转换为协议格式
-                    protocol_data = PositionProtocolData.from_location_data(
-                        location_data)
-                    message = protocol_data.to_protocol_string()
-                    self.client.publish("BD_FANYUAN_POSITION_TOPIC", message)
+                    mqtt_config = self.config_manager.get_mqtt_config()
+                    topic = mqtt_config.get("uplink_topic", "/device/location/{deviceId}")
+                    protocol_data = PositionProtocolData.from_location_result(location_data)
+                    message = protocol_data.to_beidou_protocol_string()
+                    self.client.publish(topic.format(deviceId=record.device_id), message)
         except Exception as e:
             logger.exception("处理消息时出错: %s", e)

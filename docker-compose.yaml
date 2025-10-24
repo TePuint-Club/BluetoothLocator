@@ -16,8 +16,9 @@ services:
     environment:
       - BLE_MQTT_IP=localhost
       - BLE_MQTT_PORT=1883
-      - BLE_MQTT_TOPIC=/device/blueTooth/station/+
-      - BLE_PATH_BEACON_DB=/app/beacon/used.json
+      - BLE_MQTT_UPLINK_TOPIC=/device/location/{deviceId}
+      - BLE_MQTT_DOWNLINK_TOPIC=/device/blueTooth/station/+
+      - BLE_PATH_BEACON_DB=/app/beacon/used.csv
       # Optional RSSI model overrides
       # - BLE_RSSI_TX_POWER=-59
       # - BLE_RSSI_PATH_LOSS=2.0
